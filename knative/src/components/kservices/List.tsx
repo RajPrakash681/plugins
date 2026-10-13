@@ -22,7 +22,6 @@ import {
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { Link } from '@kinvolk/headlamp-plugin/lib/components/common';
 import ConfigMap from '@kinvolk/headlamp-plugin/lib/k8s/configMap';
-import Pod from '@kinvolk/headlamp-plugin/lib/k8s/pod';
 import { Chip, Stack, Typography } from '@mui/material';
 import React, { useMemo } from 'react';
 import {
@@ -38,6 +37,7 @@ import { getSafeUrl } from '../../utils/url';
 import { NotInstalledBanner } from '../common/NotInstalledBanner';
 import { ReadyStatusLabel } from '../common/ReadyStatusLabel';
 import { ExternalUrl } from '../common/ResourceListCells';
+import { useCanRestartKService } from './detail/hooks/useCanRestartKService';
 import { useKServiceActions } from './detail/hooks/useKServiceActions';
 
 type IngressClassWithCluster = {
@@ -138,6 +138,13 @@ type KServiceRowActionsProps = {
   closeMenu?: () => void;
 };
 
+/**
+ * Shows the Redeploy Latest Revision and Restart items of a Knative Service's row menu, each only
+ * to users who are allowed to use it.
+ *
+ * @param props - The Knative Service, and `closeMenu`, which closes the row menu after an action.
+ * @returns The menu items.
+ */
 function KServiceRowActions({ kservice, closeMenu }: KServiceRowActionsProps) {
   const { acting, handleRedeploy, handleRestart } = useKServiceActions(kservice, {
     onDone: () => {
@@ -158,12 +165,7 @@ function KServiceRowActions({ kservice, closeMenu }: KServiceRowActionsProps) {
     cluster,
   });
 
-  const canDeletePods = useAuthorization({
-    item: Pod,
-    authVerb: 'delete',
-    namespace,
-    cluster,
-  });
+  const canRestart = useCanRestartKService(namespace, cluster);
 
   return (
     <>
@@ -176,7 +178,7 @@ function KServiceRowActions({ kservice, closeMenu }: KServiceRowActionsProps) {
           iconButtonProps={{ disabled }}
         />
       )}
-      {canDeletePods.allowed === true && (
+      {canRestart.allowed === true && (
         <ActionButton
           description="Restart"
           buttonStyle="menu"

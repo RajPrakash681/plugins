@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-import Pod from '@kinvolk/headlamp-plugin/lib/k8s/pod';
+import { ApiProxy } from '@kinvolk/headlamp-plugin/lib';
+import Deployment from '@kinvolk/headlamp-plugin/lib/k8s/deployment';
 import type { SnackbarKey } from 'notistack';
 import { useSnackbar } from 'notistack';
 import React from 'react';
 import type { KService } from '../../../../resources/knative';
 import { useNotify } from '../../../common/notifications/useNotify';
+import { restartKServicePods } from './restartKServicePods';
 
 type KServiceActionId = 'redeploy' | 'restart';
 
@@ -28,151 +30,87 @@ type UseKServiceActionsOptions = {
 };
 
 /**
- * Restart a KService by deleting its pods one by one.
+ * Reads the Deployments that match a label selector once, without watching.
  *
- * We intentionally avoid "rollout restart" via Deployment patching here, because the Knative
- * control plane may reconcile it back quickly and it may not create an observable change.
- * Deleting pods directly triggers the controller to recreate them.
+ * @param query - Cluster, namespace and label selector of the Deployments to read.
+ * @returns The matching Deployments as plain Kubernetes objects.
  */
-const POD_DELETE_DELAY_MS = 2000;
-const POD_DELETION_TIMEOUT_MS = 600_000;
-const POD_DELETION_POLL_INTERVAL_MS = 1_000;
-const POD_RECOVERY_TIMEOUT_MS = 60_000;
-const POD_RECOVERY_POLL_INTERVAL_MS = 2_000;
-
-function sleep(ms: number) {
-  return new Promise<void>(resolve => setTimeout(resolve, ms));
-}
-
-function countRunningPods(pods: Pod[]) {
-  return pods.filter(p => !p.metadata.deletionTimestamp && (p.status?.phase ?? '') === 'Running')
-    .length;
-}
-
-async function waitForPodDeletion(params: {
+async function listDeploymentsByLabelSelector(query: {
   cluster: string;
   namespace: string;
   labelSelector: string;
-  podName: string;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-}) {
-  const {
-    cluster,
-    namespace,
-    labelSelector,
-    podName,
-    timeoutMs = POD_DELETION_TIMEOUT_MS,
-    pollIntervalMs = POD_DELETION_POLL_INTERVAL_MS,
-  } = params;
-
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    try {
-      const pods = await listPodsByLabelSelector({ cluster, namespace, labelSelector });
-      const stillExists = pods.some(p => p.metadata.name === podName);
-      if (!stillExists) {
-        return true;
-      }
-    } catch {
-      // Ignore transient list errors and retry until timeout.
-    }
-
-    await sleep(pollIntervalMs);
-  }
-
-  return false;
+}): Promise<Deployment['jsonData'][]> {
+  const { cluster, namespace, labelSelector } = query;
+  const list = await ApiProxy.clusterRequest(
+    `/apis/apps/v1/namespaces/${namespace}/deployments`,
+    { cluster },
+    { labelSelector }
+  );
+  return list?.items ?? [];
 }
 
-async function waitForRunningPodRecovery(params: {
-  cluster: string;
-  namespace: string;
-  labelSelector: string;
-  targetRunningCount: number;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-  onTick?: (info: { runningCount: number }) => void;
-}) {
-  const {
-    cluster,
-    namespace,
-    labelSelector,
-    targetRunningCount,
-    timeoutMs = POD_RECOVERY_TIMEOUT_MS,
-    pollIntervalMs = POD_RECOVERY_POLL_INTERVAL_MS,
-    onTick,
-  } = params;
+/**
+ * Watches the Deployments that match a label selector through `Deployment.apiList`. Each
+ * Deployment is tagged with `cluster`, so that its `patch` goes to the right cluster.
+ *
+ * @param query - Cluster, namespace and label selector of the Deployments to watch.
+ * @param onUpdate - Called with every matching Deployment after each change.
+ * @param onError - Called when listing or watching fails.
+ * @returns A function that stops the watch, which also works before the watch has started.
+ */
+function watchDeploymentsByLabelSelector(
+  query: { cluster: string; namespace: string; labelSelector: string },
+  onUpdate: (deployments: Deployment[]) => void,
+  onError: (err: unknown) => void
+): () => void {
+  const { cluster, namespace, labelSelector } = query;
+  let cancel: (() => void) | null = null;
+  let stopped = false;
 
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    try {
-      const pods = await listPodsByLabelSelector({ cluster, namespace, labelSelector });
-      const runningCount = countRunningPods(pods);
-      if (onTick) {
-        onTick({ runningCount });
-      }
-      if (runningCount >= targetRunningCount) {
-        return true;
-      }
-    } catch {
-      // Ignore transient list errors and retry until timeout.
-    }
-
-    await sleep(pollIntervalMs);
-  }
-
-  return false;
-}
-
-async function listPodsByLabelSelector(params: {
-  cluster: string;
-  namespace: string;
-  labelSelector: string;
-}): Promise<Pod[]> {
-  const { cluster, namespace, labelSelector } = params;
-
-  return new Promise<Pod[]>((resolve, reject) => {
-    let cancelFn: (() => void) | null = null;
-
-    const handleList = (items: Pod[]) => {
-      // Ensure the Pod instances are associated with the correct cluster.
-      // Without this, subsequent operations like `delete` may target the wrong cluster.
-      const itemsWithCluster = items.map(item => {
-        item.cluster = cluster;
-        return item;
-      });
-
-      resolve(itemsWithCluster);
-      if (cancelFn) {
-        cancelFn();
-      }
-    };
-
-    const handleError = (err: unknown) => {
-      reject(err);
-      if (cancelFn) {
-        cancelFn();
-      }
-    };
-
-    const request = Pod.apiList(handleList, handleError, {
+  const request = Deployment.apiList(
+    (items: Deployment[]) => {
+      onUpdate(
+        items.map(item => {
+          item.cluster = cluster;
+          return item;
+        })
+      );
+    },
+    onError,
+    {
       namespace,
       cluster,
       queryParams: { labelSelector },
-    });
+    }
+  );
 
-    request()
-      .then(cancel => {
-        cancelFn = cancel;
-      })
-      .catch(err => {
-        handleError(err);
-      });
-  });
+  request()
+    .then(cancelRequest => {
+      if (stopped) {
+        cancelRequest();
+      } else {
+        cancel = cancelRequest;
+      }
+    })
+    .catch(onError);
+
+  return () => {
+    stopped = true;
+    if (cancel) {
+      cancel();
+    }
+  };
 }
 
+/**
+ * Provides the Redeploy and Restart actions of a Knative Service.
+ *
+ * @param kservice - The Knative Service to act on; the actions do nothing until it has loaded.
+ * @param options - `onDone`, called after a successful redeploy, or once a restart has reported its
+ * result for the running Deployments.
+ * @returns `acting`, the action in progress or null, and the `handleRedeploy` and `handleRestart`
+ * handlers.
+ */
 export function useKServiceActions(
   kservice: KService | null | undefined,
   options?: UseKServiceActionsOptions
@@ -247,6 +185,12 @@ export function useKServiceActions(
     }
   }
 
+  /**
+   * Restarts the Knative Service's Pods with a Deployment rollout and reports the result. Does
+   * nothing while another action is running or the Knative Service has not loaded.
+   *
+   * @returns A promise that settles once the result has been reported.
+   */
   async function handleRestart() {
     if (acting !== null) {
       return;
@@ -271,107 +215,23 @@ export function useKServiceActions(
         return;
       }
 
-      // Knative sets this label on pods for all revisions of the KService.
-      const labelSelector = `serving.knative.dev/service=${serviceName}`;
-
-      const pods = await listPodsByLabelSelector({
+      await restartKServicePods({
+        clearProgress,
         cluster: kservice.cluster,
+        listDeploymentsByLabelSelector,
         namespace,
-        labelSelector,
+        notifyError,
+        notifyInfo,
+        onDone,
+        serviceName,
+        setProgress,
+        watchDeploymentsByLabelSelector,
       });
-
-      const deletablePods = pods
-        .filter(pod => !pod.metadata.deletionTimestamp)
-        .sort((a, b) => {
-          const aCreationTime = new Date(a.metadata.creationTimestamp).getTime();
-          const bCreationTime = new Date(b.metadata.creationTimestamp).getTime();
-          return aCreationTime - bCreationTime;
-        });
-
-      if (deletablePods.length === 0) {
-        notifyInfo('No pods found for KService');
-        return;
-      }
-
-      let failedCount = 0;
-
-      for (let i = 0; i < deletablePods.length; i += 1) {
-        const podName = deletablePods[i].metadata.name!;
-
-        let runningBefore = 0;
-        let podToDelete: Pod | null = null;
-        try {
-          const currentPods = await listPodsByLabelSelector({
-            cluster: kservice.cluster,
-            namespace,
-            labelSelector,
-          });
-          runningBefore = countRunningPods(currentPods);
-          podToDelete = currentPods.find(p => p.metadata.name === podName) ?? null;
-        } catch {
-          // Fall back to deleting the original instance if listing failed.
-          podToDelete = deletablePods[i];
-        }
-
-        if (!podToDelete || podToDelete.metadata.deletionTimestamp) {
-          continue;
-        }
-
-        try {
-          setProgress(
-            `Restart in progress: deleting pod ${podName} (${i + 1}/${deletablePods.length})`
-          );
-          await podToDelete.delete();
-          const deleted = await waitForPodDeletion({
-            cluster: kservice.cluster,
-            namespace,
-            labelSelector,
-            podName,
-          });
-          if (!deleted) {
-            notifyError(`Timed out waiting for pod deletion: ${podName}`);
-          }
-        } catch (err: unknown) {
-          failedCount += 1;
-          const error = err as { message?: string } | undefined;
-          const detail = error?.message?.trim();
-          notifyError(
-            detail
-              ? `Failed to delete pod ${podName}: ${detail}`
-              : `Failed to delete pod ${podName}`
-          );
-        }
-
-        const recovered = await waitForRunningPodRecovery({
-          cluster: kservice.cluster,
-          namespace,
-          labelSelector,
-          targetRunningCount: runningBefore,
-        });
-
-        if (!recovered) {
-          notifyError(`Timed out waiting for replacement pod after deleting ${podName}`);
-        }
-
-        if (i < deletablePods.length - 1) {
-          await sleep(POD_DELETE_DELAY_MS);
-        }
-      }
-
-      if (failedCount > 0) {
-        notifyError(`Restart completed with errors (${failedCount}/${deletablePods.length})`);
-      } else {
-        notifyInfo('Restart completed successfully');
-      }
-      if (onDone) {
-        onDone();
-      }
     } catch (err: unknown) {
       const error = err as { message?: string } | undefined;
       const detail = error?.message?.trim();
       notifyError(detail ? `Restart failed: ${detail}` : 'Restart failed');
     } finally {
-      clearProgress();
       setActing(null);
     }
   }
