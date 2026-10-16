@@ -23,6 +23,19 @@ export function getErrorMessage(error: unknown): string {
   return 'Unknown API error';
 }
 
+/**
+ * Appends an error's message to a sentence for a notification.
+ *
+ * @param text - The sentence.
+ * @param error - The thrown value.
+ * @returns `<text>: <message>`, or `text` alone when the error has no message.
+ */
+export function withErrorDetail(text: string, error: unknown): string {
+  const message = (error as { message?: unknown } | undefined)?.message;
+  const detail = typeof message === 'string' ? message.trim() : '';
+  return detail ? `${text}: ${detail}` : text;
+}
+
 export function isNotFoundError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('status' in error)) return false;
   return (error as { status?: unknown }).status === 404;

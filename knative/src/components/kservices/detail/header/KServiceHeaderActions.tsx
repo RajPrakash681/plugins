@@ -18,6 +18,7 @@ import { ActionButton } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { KService } from '../../../../resources/knative';
 import { useKServiceActions } from '../hooks/useKServiceActions';
 import { useKServicePermissions } from '../permissions/KServicePermissionsProvider';
+import { KServiceRestartButton } from './KServiceRestartButton';
 
 type KServiceHeaderActionsProps = {
   kservice: KService;
@@ -31,8 +32,7 @@ type KServiceHeaderActionsProps = {
  * @returns The action buttons.
  */
 export function KServiceHeaderActions({ kservice }: KServiceHeaderActionsProps) {
-  const { acting, handleRedeploy, handleRestart } = useKServiceActions(kservice);
-  const disabled = acting !== null;
+  const { busy, handleRedeploy, setRestarting } = useKServiceActions(kservice);
   const { canPatchKService, canRestart } = useKServicePermissions();
 
   return (
@@ -42,15 +42,14 @@ export function KServiceHeaderActions({ kservice }: KServiceHeaderActionsProps) 
           description="Redeploy Latest Revision"
           icon="mdi:update"
           onClick={handleRedeploy}
-          iconButtonProps={{ disabled }}
+          iconButtonProps={{ disabled: busy }}
         />
       )}
       {canRestart === true && (
-        <ActionButton
-          description="Restart"
-          icon="mdi:restart"
-          onClick={handleRestart}
-          iconButtonProps={{ disabled }}
+        <KServiceRestartButton
+          kservice={kservice}
+          disabled={busy}
+          onRestartingChange={setRestarting}
         />
       )}
     </>

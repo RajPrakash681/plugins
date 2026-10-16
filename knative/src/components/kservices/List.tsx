@@ -37,6 +37,7 @@ import { getSafeUrl } from '../../utils/url';
 import { NotInstalledBanner } from '../common/NotInstalledBanner';
 import { ReadyStatusLabel } from '../common/ReadyStatusLabel';
 import { ExternalUrl } from '../common/ResourceListCells';
+import { KServiceRestartButton } from './detail/header/KServiceRestartButton';
 import { useCanRestartKService } from './detail/hooks/useCanRestartKService';
 import { useKServiceActions } from './detail/hooks/useKServiceActions';
 
@@ -146,14 +147,9 @@ type KServiceRowActionsProps = {
  * @returns The menu items.
  */
 function KServiceRowActions({ kservice, closeMenu }: KServiceRowActionsProps) {
-  const { acting, handleRedeploy, handleRestart } = useKServiceActions(kservice, {
-    onDone: () => {
-      if (closeMenu) {
-        closeMenu();
-      }
-    },
+  const { busy, handleRedeploy, setRestarting } = useKServiceActions(kservice, {
+    onDone: closeMenu,
   });
-  const disabled = acting !== null;
   const namespace = kservice.metadata.namespace;
   const cluster = kservice.cluster;
 
@@ -175,16 +171,16 @@ function KServiceRowActions({ kservice, closeMenu }: KServiceRowActionsProps) {
           buttonStyle="menu"
           onClick={handleRedeploy}
           icon="mdi:update"
-          iconButtonProps={{ disabled }}
+          iconButtonProps={{ disabled: busy }}
         />
       )}
       {canRestart.allowed === true && (
-        <ActionButton
-          description="Restart"
+        <KServiceRestartButton
+          kservice={kservice}
           buttonStyle="menu"
-          onClick={handleRestart}
-          icon="mdi:restart"
-          iconButtonProps={{ disabled }}
+          disabled={busy}
+          onRestartingChange={setRestarting}
+          onDone={closeMenu}
         />
       )}
     </>

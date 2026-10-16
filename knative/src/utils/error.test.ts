@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { getErrorMessage, isNotFoundError } from './error';
+import { getErrorMessage, isNotFoundError, withErrorDetail } from './error';
 
 describe('getErrorMessage', () => {
   it('returns the message from Error and API-like objects', () => {
@@ -25,6 +25,24 @@ describe('getErrorMessage', () => {
   it('uses a stable fallback when no message is available', () => {
     expect(getErrorMessage(undefined)).toBe('Unknown API error');
     expect(getErrorMessage({ message: undefined })).toBe('Unknown API error');
+  });
+});
+
+describe('withErrorDetail', () => {
+  it('appends the trimmed message of the error', () => {
+    expect(withErrorDetail('Restart failed', new Error(' forbidden \n'))).toBe(
+      'Restart failed: forbidden'
+    );
+    expect(withErrorDetail('Restart failed', { message: 'Unreachable' })).toBe(
+      'Restart failed: Unreachable'
+    );
+  });
+
+  it('returns the sentence alone when the error has no message', () => {
+    expect(withErrorDetail('Restart failed', undefined)).toBe('Restart failed');
+    expect(withErrorDetail('Restart failed', new Error('  '))).toBe('Restart failed');
+    expect(withErrorDetail('Restart failed', 'not an error object')).toBe('Restart failed');
+    expect(withErrorDetail('Restart failed', { message: 42 })).toBe('Restart failed');
   });
 });
 
