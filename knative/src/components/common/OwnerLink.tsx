@@ -112,25 +112,16 @@ export function OwnerLink({
   const text = label || owner.name;
 
   const routeName = ownerRouteNames.get(`${owner.apiVersion}/${owner.kind}`);
-  if (routeName) {
-    return (
-      <Link
-        routeName={routeName}
-        params={{ namespace: namespace || 'default', name: owner.name }}
-        activeCluster={cluster}
-      >
-        {text}
-      </Link>
-    );
-  }
-
-  const crd = getOwnerCrdName(owner);
-  if (!crd) return <TextValue value={text} />;
+  const crd = routeName ? undefined : getOwnerCrdName(owner);
+  if (!routeName && !crd) return <TextValue value={text} />;
 
   return (
     <Link
-      routeName="customresource"
-      params={{ crd, namespace: namespace || 'default', crName: owner.name }}
+      routeName={routeName || 'customresource'}
+      params={{
+        namespace: namespace || 'default',
+        ...(crd ? { crd, crName: owner.name } : { name: owner.name }),
+      }}
       activeCluster={cluster}
     >
       {text}
