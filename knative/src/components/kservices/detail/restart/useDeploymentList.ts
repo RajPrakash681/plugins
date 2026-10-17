@@ -24,7 +24,7 @@ import Deployment, { type KubeDeployment } from '@kinvolk/headlamp-plugin/lib/k8
  * @param cluster - Cluster to list from.
  * @param namespace - Namespace to list from.
  * @param labelSelector - Label selector of the Deployments to list.
- * @returns Headlamp's list result: the Deployments, and whether they are loaded, fresh or failed.
+ * @returns Headlamp's list result: the Deployments the watch last delivered, or the error.
  */
 export function useDeploymentList(cluster: string, namespace: string, labelSelector: string) {
   return Deployment.useList({ cluster, namespace, labelSelector });

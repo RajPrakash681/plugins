@@ -32,7 +32,7 @@ type UseRestartRolloutOptions = {
   /** Identifies the Knative Service, for the cache key of the fresh read. */
   serviceKey: string;
   /** The Service's Deployments as the watch last delivered them; null until the first list. */
-  deployments: readonly RestartableDeployment[] | null;
+  deployments: readonly KubeDeployment[] | null;
   /** The Service's Deployments from one read made when the restart began; null until it answers. */
   start: readonly RestartableDeployment[] | null;
   /** Why the Deployments could not be listed, if they could not. */
@@ -79,11 +79,12 @@ function withTimeout<T>(request: Promise<T>, what: string): Promise<T> {
  * running Pods, follows every rollout through the Deployments the caller keeps up to date, and
  * shows the result. A patch that gets no answer in time, or fails without the API server refusing
  * it, is still followed, since the API server may have applied it; its rollout counts only once the
- * Deployment shows this restart's annotation. When the rollouts make no progress for as long as the
+ * Deployment shows this restart's annotation. A Deployment that the watch lacks counts as removed
+ * only once a fresh read lacks it too. When the rollouts make no progress for as long as the
  * Deployments allow, one fresh read settles what is left.
  *
- * The restart begins as soon as the first fresh list has arrived, so the component that uses this
- * hook is meant to live only as long as the restart.
+ * The restart begins as soon as the read it starts from has arrived, so the component that uses
+ * this hook is meant to live only as long as the restart.
  *
  * @param options - The Deployments to restart and how to read them again.
  */
@@ -111,22 +112,21 @@ export function useRestartRollout({
   const restartedAt =
     phase.step === 'rolling' || phase.step === 'confirming' ? phase.restartedAt : '';
   const idleMs = phase.step === 'rolling' ? phase.idleMs : 0;
-  const activityKey =
+  const watchedPending =
     phase.step === 'rolling'
-      ? Array.from(
-          phase.pending.keys(),
-          name => deployments?.find(item => item.metadata.name === name)?.metadata.resourceVersion
-        ).join(',')
-      : '';
-  const progress = phase.step === 'listing' || phase.step === 'done' ? null : phase.progress;
-  const watchedNames = new Set(deployments?.map(item => item.metadata.name));
+      ? Array.from(phase.pending.keys(), name =>
+          deployments?.find(item => item.metadata.name === name)
+        )
+      : [];
+  const activityKey = watchedPending.map(item => item?.metadata.resourceVersion).join(',');
+  // Set while the watch lacks a followed Deployment; it changes with every watch update then.
   const missingKey =
-    phase.step === 'rolling' &&
-    deployments &&
-    Array.from(phase.pending.keys()).some(name => !watchedNames.has(name))
+    deployments && watchedPending.includes(undefined)
       ? deployments.map(item => `${item.metadata.name}@${item.metadata.resourceVersion}`).join(',')
       : null;
+  const progress = phase.step === 'listing' || phase.step === 'done' ? null : phase.progress;
 
+  // Start from the read made when the restart began, or give up when there is none.
   React.useEffect(() => {
     if (!listing) {
       return;
@@ -149,6 +149,7 @@ export function useRestartRollout({
     return () => clearTimeout(timer);
   }, [listing]);
 
+  // Patch the running Deployments. The patch is the same when it is sent twice.
   React.useEffect(() => {
     if (!patching) {
       return;
@@ -175,6 +176,8 @@ export function useRestartRollout({
     };
   }, [patching]);
 
+  // Give up when the followed rollouts stay quiet for `idleMs`; any change to them starts the wait
+  // over, because `activityKey` changes with them.
   React.useEffect(() => {
     if (!rolling) {
       return;
@@ -183,6 +186,7 @@ export function useRestartRollout({
     return () => clearTimeout(timer);
   }, [rolling, idleMs, activityKey]);
 
+  // Give up after an hour at the latest, however much the rollouts keep changing.
   React.useEffect(() => {
     if (!rolling) {
       return;
@@ -191,6 +195,8 @@ export function useRestartRollout({
     return () => clearTimeout(timer);
   }, [rolling]);
 
+  // One fresh read: it confirms a Deployment the watch lacks while rolling, and settles what is left
+  // once the wait has given up.
   const confirmation = useQuery({
     enabled: missingKey !== null || confirming,
     queryKey: ['knative', 'restart-confirmation', serviceKey, restartedAt, missingKey],
@@ -198,16 +204,18 @@ export function useRestartRollout({
     retry: false,
     gcTime: 0,
   });
+
+  // Follow the rollouts. A cached watch list may omit a new Deployment; only a fresh read can
+  // confirm its removal.
+  const observed = missingKey === null ? deployments : confirmation.data;
   React.useEffect(() => {
-    if (rolling) {
-      // A cached watch list may omit a new Deployment; only a fresh read can confirm its removal.
-      const observed =
-        missingKey === null ? deployments : confirmation.isSuccess ? confirmation.data : null;
-      if (observed) {
-        dispatch({ type: 'observed', deployments: observed });
-      }
-      return;
+    if (rolling && observed) {
+      dispatch({ type: 'observed', deployments: observed });
     }
+  }, [rolling, observed]);
+
+  // Settle what is left with the fresh read.
+  React.useEffect(() => {
     if (!confirming) {
       return;
     }
@@ -217,9 +225,6 @@ export function useRestartRollout({
       dispatch({ type: 'confirmFailed', error: confirmation.error });
     }
   }, [
-    rolling,
-    deployments,
-    missingKey,
     confirming,
     confirmation.isSuccess,
     confirmation.isError,
@@ -227,6 +232,7 @@ export function useRestartRollout({
     confirmation.error,
   ]);
 
+  // Show the messages, and tell the caller once they have been shown.
   React.useEffect(() => {
     if (outbox.length === 0) {
       return;
@@ -241,6 +247,7 @@ export function useRestartRollout({
     }
   }, [phase, outbox]);
 
+  // Keep the progress message on screen for as long as the restart is under way.
   React.useEffect(() => {
     if (progress === null) {
       return;

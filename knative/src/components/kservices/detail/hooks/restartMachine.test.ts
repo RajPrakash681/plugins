@@ -175,18 +175,13 @@ describe('restartReducer', () => {
       outcomes: [fulfilled],
     });
 
-    it('ignores repeated watch data, keeping the very same state', () => {
-      const observed = restartReducer(rolling, {
-        type: 'observed',
-        deployments: [restarted(FIRST, 1, { observedGeneration: 1 })],
-      });
-
+    it('ignores data that changes nothing, keeping the very same state', () => {
       expect(
-        restartReducer(observed, {
+        restartReducer(rolling, {
           type: 'observed',
           deployments: [restarted(FIRST, 1, { observedGeneration: 1 })],
         })
-      ).toBe(observed);
+      ).toBe(rolling);
     });
 
     it('reports success once the rollout is complete', () => {

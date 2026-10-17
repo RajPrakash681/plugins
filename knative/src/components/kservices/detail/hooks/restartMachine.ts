@@ -33,8 +33,8 @@ type Notice = {
 };
 
 /**
- * What a restart uses of a Deployment: its data, and the `patch` that starts the rollout.
- * Headlamp's `Deployment` fits it, and so does a test double without the rest of the class.
+ * What a restart uses of a Deployment: its data, and the `patch` that starts the rollout. Headlamp's
+ * `Deployment` fits it, and so does a test double without the rest of the class.
  */
 export type RestartableDeployment = KubeDeployment & Pick<Deployment, 'patch'>;
 
@@ -71,17 +71,15 @@ type Following = {
   patchRefused: boolean;
   /** Milliseconds without activity after which the wait for the rollouts gives up. */
   idleMs: number;
-  /** Names and resource versions of the last watch list processed by the reducer. */
-  observationKey: string | null;
 };
 
 /** Where a restart stands. */
 type Phase =
-  /** Waiting for the first fresh list of the Service's Deployments. */
+  /** Waiting for the read of the Service's Deployments that the restart starts from. */
   | { step: 'listing' }
   /** Patching the running Deployments. */
   | { step: 'patching'; restartedAt: string; progress: string; targets: Target[] }
-  /** Following the rollouts through the watch. */
+  /** Following the rollouts through the Deployments as they are observed. */
   | ({ step: 'rolling' } & Following)
   /** The watch went quiet; waiting for a fresh read that settles what is left. */
   | ({ step: 'confirming' } & Following)
@@ -98,11 +96,11 @@ export type RestartState = {
 
 /** What can happen to a restart. */
 export type RestartAction =
-  /** The first fresh list arrived. */
+  /** The read that the restart starts from arrived. */
   | { type: 'listed'; deployments: readonly RestartableDeployment[]; restartedAt: string }
   /** Every restart patch ended. */
   | { type: 'patched'; outcomes: readonly PatchOutcome[] }
-  /** The watch delivered new data. */
+  /** New data about the Deployments arrived while the rollouts are followed. */
   | { type: 'observed'; deployments: readonly KubeDeployment[] }
   /** The wait for the rollouts gave up. */
   | { type: 'gaveUp' }
@@ -152,7 +150,7 @@ function summarize(following: Following, problems: string[]): Notice {
 }
 
 /**
- * Starts a restart from the first fresh list: the running Deployments become the targets.
+ * Starts a restart from the read it begins with: the running Deployments become the targets.
  *
  * @param state - The state of the restart.
  * @param deployments - The Deployments of the Knative Service.
@@ -191,14 +189,13 @@ function start(
 
 /**
  * Takes in how the restart patches ended. A patch that the API server refused changed nothing and
- * is reported at once. Any other patch may have been applied, even one that failed or got no
- * answer, so its Deployment is followed all the same.
+ * is reported at once. Any other patch may have been applied, even one that failed or got no answer,
+ * so its Deployment is followed all the same.
  *
  * @param state - The state of the restart.
  * @param phase - The patching phase.
  * @param outcomes - How each target's patch ended, in the order of the targets.
- * @returns The state that follows the rollouts, or the finished state when no patch can have
- * worked.
+ * @returns The state that follows the rollouts, or the finished state when no patch can have worked.
  */
 function takeOutcomes(
   state: RestartState,
@@ -246,18 +243,17 @@ function takeOutcomes(
         progressDeadlineSeconds * 1000 + ROLLOUT_TIMEOUT_MARGIN_MS,
         MAX_ROLLOUT_TIMEOUT_MS
       ),
-      observationKey: null,
     },
     outbox: [...state.outbox, ...notices],
   };
 }
 
 /**
- * Checks the followed rollouts against a list whose missing Deployments are known to be removed.
+ * Checks the followed rollouts against a list in which a missing Deployment counts as removed.
  *
  * @param state - The state of the restart.
  * @param phase - The rolling phase.
- * @param deployments - The watched Deployments when none are missing, or a fresh list.
+ * @param deployments - The latest Deployments.
  * @returns The state without the rollouts that have finished, or the finished state once none is
  * left. The very `state` when nothing has changed.
  */
@@ -345,19 +341,8 @@ export function restartReducer(state: RestartState, action: RestartAction): Rest
         : state;
     case 'patched':
       return phase.step === 'patching' ? takeOutcomes(state, phase, action.outcomes) : state;
-    case 'observed': {
-      if (phase.step !== 'rolling') {
-        return state;
-      }
-      const observationKey = action.deployments
-        .map(deployment => `${deployment.metadata.name}@${deployment.metadata.resourceVersion}`)
-        .join(',');
-      if (observationKey === phase.observationKey) {
-        return state;
-      }
-      const observed = { ...phase, observationKey };
-      return observe({ ...state, phase: observed }, observed, action.deployments);
-    }
+    case 'observed':
+      return phase.step === 'rolling' ? observe(state, phase, action.deployments) : state;
     case 'gaveUp':
       return phase.step === 'rolling'
         ? { ...state, phase: { ...phase, step: 'confirming' } }
