@@ -71,6 +71,8 @@ type Following = {
   patchRefused: boolean;
   /** Milliseconds without activity after which the wait for the rollouts gives up. */
   idleMs: number;
+  /** Names and resource versions of the last watch list processed by the reducer. */
+  observationKey: string | null;
 };
 
 /** Where a restart stands. */
@@ -244,17 +246,18 @@ function takeOutcomes(
         progressDeadlineSeconds * 1000 + ROLLOUT_TIMEOUT_MARGIN_MS,
         MAX_ROLLOUT_TIMEOUT_MS
       ),
+      observationKey: null,
     },
     outbox: [...state.outbox, ...notices],
   };
 }
 
 /**
- * Checks the followed rollouts against the data the watch delivered.
+ * Checks the followed rollouts against a list whose missing Deployments are known to be removed.
  *
  * @param state - The state of the restart.
  * @param phase - The rolling phase.
- * @param deployments - The latest Deployments.
+ * @param deployments - The watched Deployments when none are missing, or a fresh list.
  * @returns The state without the rollouts that have finished, or the finished state once none is
  * left. The very `state` when nothing has changed.
  */
@@ -342,8 +345,19 @@ export function restartReducer(state: RestartState, action: RestartAction): Rest
         : state;
     case 'patched':
       return phase.step === 'patching' ? takeOutcomes(state, phase, action.outcomes) : state;
-    case 'observed':
-      return phase.step === 'rolling' ? observe(state, phase, action.deployments) : state;
+    case 'observed': {
+      if (phase.step !== 'rolling') {
+        return state;
+      }
+      const observationKey = action.deployments
+        .map(deployment => `${deployment.metadata.name}@${deployment.metadata.resourceVersion}`)
+        .join(',');
+      if (observationKey === phase.observationKey) {
+        return state;
+      }
+      const observed = { ...phase, observationKey };
+      return observe({ ...state, phase: observed }, observed, action.deployments);
+    }
     case 'gaveUp':
       return phase.step === 'rolling'
         ? { ...state, phase: { ...phase, step: 'confirming' } }

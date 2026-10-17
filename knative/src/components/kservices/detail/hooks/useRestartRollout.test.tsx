@@ -112,7 +112,7 @@ async function begin(initial: MockDeployment[] | null, options: { listed?: boole
     (watched: Watched) =>
       useRestartRollout({
         serviceKey: 'cluster-a/default/service-a',
-        deployments: watched.deployments,
+        deployments: watched.deployments?.slice() ?? null,
         start: watched.start,
         listError: watched.listError,
         readDeployments,
@@ -288,11 +288,24 @@ describe('useRestartRollout', () => {
       const cached = makeDeployment(FIRST, 1);
       const current = makeDeployment(SECOND, 1);
       const restart = await begin([cached], { listed: false });
+      restart.readDeployments.mockResolvedValueOnce([current]);
 
       await restart.deliver({ deployments: [cached], start: [current] });
 
       expect(current.patch).toHaveBeenCalledTimes(1);
       expect(cached.patch).not.toHaveBeenCalled();
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(restart.onFinished).not.toHaveBeenCalled();
+      expect(restart.readDeployments).toHaveBeenCalledTimes(1);
+
+      await restart.deliver({ deployments: [cached], start: [current] });
+      expect(restart.readDeployments).toHaveBeenCalledTimes(1);
+
+      const restartedAt =
+        current.patch.mock.calls[0][0].spec.template.metadata.annotations[RESTARTED_AT_ANNOTATION];
+      await restart.show([cached, makeDeployment(SECOND, 1, {}, { generation: 2, restartedAt })]);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(restart.onFinished).toHaveBeenCalledTimes(1);
     });
 
     it('fails the restart when the watch cannot list the Deployments', async () => {
@@ -442,9 +455,106 @@ describe('useRestartRollout', () => {
     });
   });
 
+  describe('when the watch is missing a Deployment', () => {
+    it('reports success when the fresh read finds its completed rollout', async () => {
+      const restart = await begin([makeDeployment(FIRST, 1)]);
+      restart.readDeployments.mockResolvedValueOnce([restarted(FIRST, 1)]);
+
+      await restart.show([]);
+
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(restart.onFinished).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses watch updates without waiting for a pending fresh read', async () => {
+      const restart = await begin([makeDeployment(FIRST, 1)]);
+      let resolveRead!: (items: MockDeployment[]) => void;
+      restart.readDeployments.mockReturnValueOnce(
+        new Promise<MockDeployment[]>(resolve => {
+          resolveRead = resolve;
+        })
+      );
+
+      await restart.show([]);
+      await restart.show([restarted(FIRST, 1)]);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(restart.onFinished).toHaveBeenCalledTimes(1);
+
+      await act(async () => resolveRead([makeDeployment(FIRST, 1)]));
+      await settle();
+
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(restart.readDeployments).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps following after a transient failure without repeating the same read', async () => {
+      const restart = await begin([makeDeployment(FIRST, 1)]);
+      restart.readDeployments.mockRejectedValueOnce(new ApiStatusError(500, 'unavailable'));
+
+      await restart.show([]);
+      await restart.show([]);
+
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(restart.onFinished).not.toHaveBeenCalled();
+      expect(restart.readDeployments).toHaveBeenCalledTimes(1);
+
+      await restart.show([restarted(FIRST, 1)]);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+    });
+
+    it('stops waiting for the fresh read after two minutes', async () => {
+      const restart = await begin([makeDeployment(FIRST, 1)]);
+      restart.readDeployments.mockReturnValueOnce(new Promise(() => {}));
+
+      await restart.show([]);
+      await elapse(120_000);
+
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(restart.onFinished).not.toHaveBeenCalled();
+      await restart.show([restarted(FIRST, 1)]);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+    });
+
+    it('keeps the idle timeout running while the fresh read is pending', async () => {
+      const restart = await begin([makeDeployment(FIRST, 1, {}, { progressDeadlineSeconds: 1 })]);
+      restart.readDeployments
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValueOnce([restarted(FIRST, 1)]);
+
+      await restart.show([]);
+      await elapse(61_000);
+
+      expect(restart.readDeployments).toHaveBeenCalledTimes(2);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(restart.onFinished).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the original one-hour limit when a missing Deployment needs checking', async () => {
+      const restart = await begin([
+        makeDeployment(FIRST, 1, {}, { progressDeadlineSeconds: 2_147_483_647 }),
+      ]);
+      restart.readDeployments
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValueOnce([restarted(FIRST, 1)]);
+
+      await elapse(3_500_000);
+      await restart.show([]);
+      await elapse(100_000);
+
+      expect(restart.readDeployments).toHaveBeenCalledTimes(2);
+      expect(notifyInfo).toHaveBeenCalledWith('Restart completed successfully');
+      expect(restart.onFinished).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('when a rollout does not complete', () => {
     it('reports every Deployment whose rollout does not complete', async () => {
       const restart = await begin([makeDeployment(FIRST, 1), makeDeployment(SECOND, 1)]);
+      restart.readDeployments.mockResolvedValueOnce([
+        restarted(FIRST, 1, { conditions: DEADLINE_EXCEEDED }),
+      ]);
 
       await restart.show([restarted(FIRST, 1, { conditions: DEADLINE_EXCEEDED })]);
 
@@ -465,12 +575,14 @@ describe('useRestartRollout', () => {
 
     it('reports a Deployment that disappears during the rollout', async () => {
       const restart = await begin([makeDeployment(FIRST, 1)]);
+      restart.readDeployments.mockResolvedValueOnce([]);
 
       await restart.show([]);
 
       expect(notifyError).toHaveBeenCalledWith(
         `Restart did not complete: ${FIRST} was removed before its rollout finished`
       );
+      expect(restart.readDeployments).toHaveBeenCalledTimes(1);
     });
 
     it('times out when a rollout makes no progress, after one fresh read', async () => {

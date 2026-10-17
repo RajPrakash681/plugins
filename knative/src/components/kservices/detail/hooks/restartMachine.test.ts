@@ -175,13 +175,18 @@ describe('restartReducer', () => {
       outcomes: [fulfilled],
     });
 
-    it('ignores data that changes nothing, keeping the very same state', () => {
+    it('ignores repeated watch data, keeping the very same state', () => {
+      const observed = restartReducer(rolling, {
+        type: 'observed',
+        deployments: [restarted(FIRST, 1, { observedGeneration: 1 })],
+      });
+
       expect(
-        restartReducer(rolling, {
+        restartReducer(observed, {
           type: 'observed',
           deployments: [restarted(FIRST, 1, { observedGeneration: 1 })],
         })
-      ).toBe(rolling);
+      ).toBe(observed);
     });
 
     it('reports success once the rollout is complete', () => {
@@ -207,7 +212,7 @@ describe('restartReducer', () => {
       ]);
     });
 
-    it('reports the problems of the rollouts that did not complete', () => {
+    it('reports a Deployment whose removal was confirmed', () => {
       expect(restartReducer(rolling, { type: 'observed', deployments: [] }).outbox).toEqual([
         {
           level: 'error',

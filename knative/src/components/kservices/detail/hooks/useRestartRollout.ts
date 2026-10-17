@@ -28,7 +28,6 @@ import {
 } from './restartMachine';
 import { RESTARTED_AT_ANNOTATION } from './rollout';
 
-/** What {@link useRestartRollout} restarts, and how it reads and reports. */
 type UseRestartRolloutOptions = {
   /** Identifies the Knative Service, for the cache key of the fresh read. */
   serviceKey: string;
@@ -74,23 +73,6 @@ function withTimeout<T>(request: Promise<T>, what: string): Promise<T> {
 }
 
 /**
- * Keeps handing back the same value for as long as its key stays the same. The Deployments of a
- * watch may be a new array on every render, so the effects that react to them depend on this
- * instead.
- *
- * @param value - The latest value.
- * @param key - Tells whether `value` is worth replacing the one held.
- * @returns The value that was current when the key last changed.
- */
-function useStableValue<T>(value: T, key: string | null): T {
-  const held = React.useRef({ key, value });
-  if (held.current.key !== key) {
-    held.current = { key, value };
-  }
-  return held.current.value;
-}
-
-/**
  * Restarts a Knative Service's running Deployments the way `kubectl rollout restart` does and
  * follows their rollouts until the result can be shown. It sets the
  * `kubectl.kubernetes.io/restartedAt` annotation on the Pod template of each Deployment that has
@@ -101,18 +83,7 @@ function useStableValue<T>(value: T, key: string | null): T {
  * Deployments allow, one fresh read settles what is left.
  *
  * The restart begins as soon as the first fresh list has arrived, so the component that uses this
- * hook is meant to live only as long as the restart. Its steps, each run by one effect:
- *
- * 1. Start from the read made when the restart began, or give up when it has not answered within
- *    two minutes.
- * 2. Patch the running Deployments. The patch is the same when it is sent twice.
- * 3. Follow the rollouts through every new list.
- * 4. Give up when the followed rollouts stay quiet for the time their progress deadline allows,
- *    where any change to them starts the wait over, and after an hour at the latest.
- * 5. Settle what is left with one fresh read.
- * 6. Show the messages, then tell the caller once they have been shown.
- *
- * The progress message stays on screen for as long as the restart is under way.
+ * hook is meant to live only as long as the restart.
  *
  * @param options - The Deployments to restart and how to read them again.
  */
@@ -133,14 +104,6 @@ export function useRestartRollout({
     onFinishedRef.current = onFinished;
   });
 
-  const latest = useStableValue(
-    deployments,
-    deployments &&
-      deployments
-        .map(deployment => `${deployment.metadata.name}@${deployment.metadata.resourceVersion}`)
-        .join(',')
-  );
-
   const listing = phase.step === 'listing';
   const patching = phase.step === 'patching' ? phase : null;
   const rolling = phase.step === 'rolling';
@@ -152,12 +115,16 @@ export function useRestartRollout({
     phase.step === 'rolling'
       ? Array.from(
           phase.pending.keys(),
-          name => latest?.find(item => item.metadata.name === name)?.metadata.resourceVersion
+          name => deployments?.find(item => item.metadata.name === name)?.metadata.resourceVersion
         ).join(',')
       : '';
-  const progress =
-    phase.step === 'patching' || phase.step === 'rolling' || phase.step === 'confirming'
-      ? phase.progress
+  const progress = phase.step === 'listing' || phase.step === 'done' ? null : phase.progress;
+  const watchedNames = new Set(deployments?.map(item => item.metadata.name));
+  const missingKey =
+    phase.step === 'rolling' &&
+    deployments &&
+    Array.from(phase.pending.keys()).some(name => !watchedNames.has(name))
+      ? deployments.map(item => `${item.metadata.name}@${item.metadata.resourceVersion}`).join(',')
       : null;
 
   React.useEffect(() => {
@@ -209,12 +176,6 @@ export function useRestartRollout({
   }, [patching]);
 
   React.useEffect(() => {
-    if (rolling && latest) {
-      dispatch({ type: 'observed', deployments: latest });
-    }
-  }, [rolling, latest]);
-
-  React.useEffect(() => {
     if (!rolling) {
       return;
     }
@@ -231,13 +192,22 @@ export function useRestartRollout({
   }, [rolling]);
 
   const confirmation = useQuery({
-    enabled: confirming,
-    queryKey: ['knative', 'restart-confirmation', serviceKey, restartedAt],
+    enabled: missingKey !== null || confirming,
+    queryKey: ['knative', 'restart-confirmation', serviceKey, restartedAt, missingKey],
     queryFn: () => withTimeout(readDeployments(), 'listing Deployments'),
     retry: false,
     gcTime: 0,
   });
   React.useEffect(() => {
+    if (rolling) {
+      // A cached watch list may omit a new Deployment; only a fresh read can confirm its removal.
+      const observed =
+        missingKey === null ? deployments : confirmation.isSuccess ? confirmation.data : null;
+      if (observed) {
+        dispatch({ type: 'observed', deployments: observed });
+      }
+      return;
+    }
     if (!confirming) {
       return;
     }
@@ -247,6 +217,9 @@ export function useRestartRollout({
       dispatch({ type: 'confirmFailed', error: confirmation.error });
     }
   }, [
+    rolling,
+    deployments,
+    missingKey,
     confirming,
     confirmation.isSuccess,
     confirmation.isError,
