@@ -17,6 +17,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
+import { never } from '../hooks/restartFixtures';
 import { KServiceRestartTracker } from './KServiceRestartTracker';
 
 const mocks = vi.hoisted(() => ({
@@ -42,10 +43,10 @@ const SELECTOR = 'serving.knative.dev/service=service-a';
  * Renders the tracker of `service-a` in namespace `default` of `cluster-a`.
  *
  * @param onFinished - Called once the restart has been shown.
- * @returns The options the tracker handed to `useRestartRollout`.
+ * @returns The render result.
  */
-function track(onFinished = vi.fn()) {
-  render(
+function renderTracker(onFinished: () => void = vi.fn()) {
+  return render(
     <QueryClientProvider client={new QueryClient()}>
       <KServiceRestartTracker
         cluster="cluster-a"
@@ -55,7 +56,6 @@ function track(onFinished = vi.fn()) {
       />
     </QueryClientProvider>
   );
-  return mocks.useRestartRollout.mock.lastCall![0];
 }
 
 /**
@@ -67,13 +67,24 @@ function lastOptions() {
   return mocks.useRestartRollout.mock.lastCall![0];
 }
 
+/**
+ * Renders the tracker and returns the options it handed to `useRestartRollout`.
+ *
+ * @param onFinished - Called once the restart has been shown.
+ * @returns The options of the latest call.
+ */
+function track(onFinished?: () => void) {
+  renderTracker(onFinished);
+  return lastOptions();
+}
+
 describe('KServiceRestartTracker', () => {
   beforeEach(() => {
     mocks.clusterRequest.mockReset();
     mocks.useList.mockReset();
     mocks.useRestartRollout.mockReset();
-    mocks.useList.mockReturnValue({ items: null, error: null, isSuccess: false, isFetching: true });
-    mocks.clusterRequest.mockReturnValue(new Promise(() => {}));
+    mocks.useList.mockReturnValue({ items: null, error: null });
+    mocks.clusterRequest.mockReturnValue(never());
   });
 
   it("watches the Service's Deployments", () => {
@@ -83,18 +94,9 @@ describe('KServiceRestartTracker', () => {
   });
 
   it('renders nothing', () => {
-    mocks.useList.mockReturnValue({ items: [], error: null, isSuccess: true, isFetching: false });
+    mocks.useList.mockReturnValue({ items: [], error: null });
 
-    const { container } = render(
-      <QueryClientProvider client={new QueryClient()}>
-        <KServiceRestartTracker
-          cluster="cluster-a"
-          namespace="default"
-          serviceName="service-a"
-          onFinished={vi.fn()}
-        />
-      </QueryClientProvider>
-    );
+    const { container } = renderTracker();
 
     expect(container.innerHTML).toBe('');
   });
@@ -103,7 +105,7 @@ describe('KServiceRestartTracker', () => {
     const items = [{ metadata: { name: 'service-a-00001-deployment' } }];
     const error = new Error('boom');
     const onFinished = vi.fn();
-    mocks.useList.mockReturnValue({ items, error, isSuccess: false, isFetching: true });
+    mocks.useList.mockReturnValue({ items, error });
 
     const options = track(onFinished);
 
@@ -118,12 +120,7 @@ describe('KServiceRestartTracker', () => {
   it('starts from one read of its own, not from the list the watch begins with', async () => {
     const cached = [{ metadata: { name: 'service-a-00001-deployment' } }];
     const current = [{ metadata: { name: 'service-a-00002-deployment' } }];
-    mocks.useList.mockReturnValue({
-      items: cached,
-      error: null,
-      isSuccess: true,
-      isFetching: false,
-    });
+    mocks.useList.mockReturnValue({ items: cached, error: null });
     mocks.clusterRequest.mockResolvedValueOnce({ items: current });
 
     expect(track().start).toBeNull();

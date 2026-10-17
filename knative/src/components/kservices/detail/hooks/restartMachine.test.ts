@@ -207,7 +207,7 @@ describe('restartReducer', () => {
       ]);
     });
 
-    it('reports the problems of the rollouts that did not complete', () => {
+    it('reports a Deployment whose removal was confirmed', () => {
       expect(restartReducer(rolling, { type: 'observed', deployments: [] }).outbox).toEqual([
         {
           level: 'error',

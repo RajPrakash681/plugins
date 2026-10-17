@@ -95,8 +95,7 @@ export const AHEAD = '2026-01-01T00:10:00.000Z';
 export const FIRST = 'service-a-00002-deployment';
 export const SECOND = 'service-a-00003-deployment';
 export const IDLE = 'service-a-00001-deployment';
-export const REVERTED =
-  `${FIRST} lost its restart annotation ` + '(restarts need Knative 1.21 or later)';
+export const REVERTED = `${FIRST} lost its restart annotation (restarts need Knative 1.21 or later)`;
 export const DEADLINE_EXCEEDED = [{ type: 'Progressing', reason: 'ProgressDeadlineExceeded' }];
 
 /**
@@ -155,4 +154,13 @@ export function restarted(
   status: Partial<MockFields['status']> = {}
 ): MockDeployment {
   return makeDeployment(name, replicas, status, { generation: 2, restartedAt: NOW });
+}
+
+/**
+ * Builds a request that never gets an answer.
+ *
+ * @returns A promise that stays pending.
+ */
+export function never(): Promise<never> {
+  return new Promise<never>(() => {});
 }

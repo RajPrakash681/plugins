@@ -77,22 +77,26 @@ export function KServiceRestartTracker({
   onFinished,
 }: KServiceRestartTrackerProps) {
   const labelSelector = `serving.knative.dev/service=${serviceName}`;
+  const serviceKey = `${cluster}/${namespace}/${serviceName}`;
+  const read = () => readDeployments(cluster, namespace, labelSelector);
   const { items, error } = useDeploymentList(cluster, namespace, labelSelector);
+  // Part of the key, so that a restart never starts from the read of an earlier one.
   const [startedAt] = React.useState(() => Date.now());
   const start = useQuery({
-    queryKey: ['knative', 'restart-start', cluster, namespace, serviceName, startedAt],
-    queryFn: async () =>
-      toDeployments(await readDeployments(cluster, namespace, labelSelector), cluster),
+    queryKey: ['knative', 'restart-start', serviceKey, startedAt],
+    queryFn: async () => toDeployments(await read(), cluster),
+    // The restart uses this read once, so nothing needs to refetch it.
+    staleTime: Infinity,
     retry: false,
     gcTime: 0,
   });
 
   useRestartRollout({
-    serviceKey: `${cluster}/${namespace}/${serviceName}`,
+    serviceKey,
     deployments: items,
     start: start.data ?? null,
     listError: start.error ?? error,
-    readDeployments: () => readDeployments(cluster, namespace, labelSelector),
+    readDeployments: read,
     onFinished,
   });
 
