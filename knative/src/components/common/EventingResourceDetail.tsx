@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+import { K8s } from '@kinvolk/headlamp-plugin/lib';
 import { DetailsGrid, type NameValueTableRow } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import type { KubeObjectClass } from '@kinvolk/headlamp-plugin/lib/k8s/cluster';
 import { useParams } from 'react-router-dom';
-import { useClusters } from '../../hooks/useClusters';
 import { useKnativeInstalled } from '../../hooks/useKnativeInstalled';
 import type { ConditionedStatus } from '../../resources/knative/conditionedResource';
 import ConditionsSection from './ConditionsSection';
@@ -42,8 +42,11 @@ export function EventingResourceDetail<
   extraInfo: (item: InstanceType<T>) => NameValueTableRow[];
 }) {
   const { name, namespace } = useParams<{ namespace: string; name: string }>();
-  const clusters = useClusters();
-  const { isKnativeInstalled, isKnativeCheckLoading } = useKnativeInstalled('eventing', clusters);
+  const cluster = K8s.useCluster();
+  const { isKnativeInstalled, isKnativeCheckLoading } = useKnativeInstalled(
+    'eventing',
+    cluster ? [cluster] : []
+  );
 
   if (!isKnativeInstalled) {
     return <NotInstalledBanner isLoading={isKnativeCheckLoading} component="eventing" />;
@@ -54,6 +57,7 @@ export function EventingResourceDetail<
       resourceType={resourceType}
       name={name}
       namespace={namespace}
+      cluster={cluster ?? undefined}
       withEvents
       extraInfo={item => (item ? extraInfo(item) : null)}
       extraSections={item => {
