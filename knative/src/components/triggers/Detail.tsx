@@ -15,11 +15,11 @@
  */
 
 import { KnativeTrigger } from '../../resources/knative';
-import { formatTriggerFilter } from '../../resources/knative/eventingData';
 import { DestinationLink } from '../common/DestinationLink';
 import { EventingResourceDetail } from '../common/EventingResourceDetail';
 import { TextValue } from '../common/ResourceListCells';
 import { BrokerLink } from './BrokerLink';
+import { TriggerFilter } from './TriggerFilter';
 
 /**
  * Shows one Knative Eventing Trigger: its Broker, its filter, its subscriber and the URI the
@@ -33,7 +33,7 @@ export function TriggerDetail() {
       resourceType={KnativeTrigger}
       extraInfo={trigger => [
         { name: 'Broker', value: <BrokerLink trigger={trigger} /> },
-        { name: 'Filter', value: formatTriggerFilter(trigger.spec) },
+        { name: 'Filter', value: <TriggerFilter spec={trigger.spec} />, valueFullRow: true },
         {
           name: 'Subscriber',
           value: (
