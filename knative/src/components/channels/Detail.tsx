@@ -18,21 +18,26 @@ import {
   SectionBox,
   SimpleTable,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
-import { KnativeChannel, KnativeSubscription } from '../../resources/knative';
+import { Typography } from '@mui/material';
+import {
+  type ChannelSubscriberStatus,
+  KnativeChannel,
+  KnativeSubscription,
+} from '../../resources/knative';
 import { DestinationLink } from '../common/DestinationLink';
 import { EventingResourceDetail } from '../common/EventingResourceDetail';
 import { ReadyStatusLabel } from '../common/ReadyStatusLabel';
 import { NamespacedResourceLink, TextValue } from '../common/ResourceListCells';
 
-/** The state a Channel reports for one of its Subscriptions. */
-type SubscriberStatus = NonNullable<NonNullable<KnativeChannel['status']>['subscribers']>[number];
-
 /**
  * Shows the state a Channel reports for each of its Subscriptions. Knative identifies them by UID,
- * so their names come from the Subscriptions in the Channel's namespace.
+ * so their names come from the Subscriptions in the Channel's namespace. A Subscription in another
+ * namespace, which Knative allows with `cross-namespace-event-links`, is not found there, and its
+ * subscriber shows the UID.
  *
  * @param props - The Channel and the subscriber states it reports.
- * @returns A table with one row per Subscription.
+ * @returns A table with one row per Subscription, and a note when the Subscriptions could not be
+ * loaded.
  */
 function SubscribersTable({
   channel,
@@ -41,9 +46,9 @@ function SubscribersTable({
   /** The Channel the subscribers belong to. */
   channel: KnativeChannel;
   /** The subscriber states the Channel reports. */
-  subscribers: SubscriberStatus[];
+  subscribers: ChannelSubscriberStatus[];
 }) {
-  const [subscriptions] = KnativeSubscription.useList({
+  const [subscriptions, error] = KnativeSubscription.useList({
     namespace: channel.getNamespace(),
     cluster: channel.cluster,
   });
@@ -52,36 +57,45 @@ function SubscribersTable({
   );
 
   return (
-    <SimpleTable
-      data={subscribers}
-      columns={[
-        {
-          label: 'Subscription',
-          getter: (subscriber: SubscriberStatus) => {
-            const name = subscriber.uid && namesByUid.get(subscriber.uid);
-            if (!name) return <TextValue value={subscriber.uid} />;
-            return (
-              <NamespacedResourceLink
-                routeName={KnativeSubscription.detailsRoute}
-                name={name}
-                namespace={channel.getNamespace()}
-                cluster={channel.cluster}
-              />
-            );
+    <>
+      {error && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Subscription names could not be loaded, so subscribers are shown by UID.
+        </Typography>
+      )}
+      <SimpleTable
+        data={subscribers}
+        columns={[
+          {
+            label: 'Subscription',
+            getter: (subscriber: ChannelSubscriberStatus) => {
+              const name = subscriber.uid && namesByUid.get(subscriber.uid);
+              if (!name) return <TextValue value={subscriber.uid} />;
+              return (
+                <NamespacedResourceLink
+                  routeName={KnativeSubscription.detailsRoute}
+                  name={name}
+                  namespace={channel.getNamespace()}
+                  cluster={channel.cluster}
+                />
+              );
+            },
           },
-        },
-        {
-          label: 'Ready',
-          getter: (subscriber: SubscriberStatus) => (
-            <ReadyStatusLabel status={subscriber.ready ?? 'Unknown'} message={subscriber.message} />
-          ),
-        },
-        {
-          label: 'Message',
-          getter: (subscriber: SubscriberStatus) => <TextValue value={subscriber.message} />,
-        },
-      ]}
-    />
+          {
+            label: 'Ready',
+            getter: (subscriber: ChannelSubscriberStatus) => (
+              <ReadyStatusLabel status={subscriber.ready ?? 'Unknown'} />
+            ),
+          },
+          {
+            label: 'Message',
+            getter: (subscriber: ChannelSubscriberStatus) => (
+              <TextValue value={subscriber.message} />
+            ),
+          },
+        ]}
+      />
+    </>
   );
 }
 

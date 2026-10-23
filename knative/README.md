@@ -68,8 +68,8 @@ subscriber resolved to. Both show conditions and events.
 
 Selecting a Channel or Subscription opens its detail page. A Channel's page shows its backing
 Channel, address, and Subscriptions with the state of each; a Subscription's page shows its
-Channel, subscriber, reply, owner, and the endpoints Knative resolved for them. Both show conditions
-and events.
+Channel, subscriber, reply, and the endpoints Knative resolved for them. Both show conditions and
+events.
 
 ## Resource Map
 

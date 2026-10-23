@@ -74,16 +74,14 @@ export function EventingResourceDetail<
       extraSections={item => {
         if (!item) return [];
         const conditions = item.status?.conditions;
+        const extra = extraSections?.(item) ?? [];
+        if (!conditions) return extra;
         return [
-          ...(conditions
-            ? [
-                {
-                  id: `knative.${resourceType.kind.toLowerCase()}-conditions`,
-                  section: <ConditionsSection conditions={conditions} />,
-                },
-              ]
-            : []),
-          ...(extraSections?.(item) ?? []),
+          {
+            id: `knative.${resourceType.kind.toLowerCase()}-conditions`,
+            section: <ConditionsSection conditions={conditions} />,
+          },
+          ...extra,
         ];
       }}
     />

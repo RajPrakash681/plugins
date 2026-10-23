@@ -16,6 +16,7 @@
 
 import { render } from '@testing-library/react';
 import type React from 'react';
+import { Fragment } from 'react';
 import { vi } from 'vitest';
 import type { KnativeChannel } from '../../resources/knative';
 
@@ -29,9 +30,23 @@ type LinkProps = {
   activeCluster?: string;
 };
 
+/** The props of the Channel page's `EventingResourceDetail` that the test records. */
+type DetailProps = {
+  /** Builds the rows shown below the metadata, for the loaded Channel. */
+  extraInfo?: (channel: unknown) => {
+    /** The row's heading. */
+    name: string;
+    /** The row's content. */
+    value: React.ReactNode;
+  }[];
+};
+
 const links = vi.hoisted(() => [] as LinkProps[]);
+const destinationLink = vi.hoisted(() => vi.fn().mockReturnValue(null));
+const detail = vi.hoisted(() => ({} as DetailProps));
 const subscriptions = vi.hoisted(() => ({
   items: [] as Array<{ metadata: { uid: string }; getName: () => string }>,
+  error: null as Error | null,
   lists: 0,
 }));
 
@@ -81,16 +96,21 @@ vi.mock('../../resources/knative', () => ({
     detailsRoute: 'knativeSubscriptionDetails',
     useList: () => {
       subscriptions.lists += 1;
-      return [subscriptions.items, null];
+      return [subscriptions.items, subscriptions.error];
     },
   },
 }));
 
-vi.mock('../common/DestinationLink', () => ({ DestinationLink: () => null }));
+vi.mock('../common/DestinationLink', () => ({ DestinationLink: destinationLink }));
 
-vi.mock('../common/EventingResourceDetail', () => ({ EventingResourceDetail: () => null }));
+vi.mock('../common/EventingResourceDetail', () => ({
+  EventingResourceDetail: (props: DetailProps) => {
+    detail.extraInfo = props.extraInfo;
+    return null;
+  },
+}));
 
-import { ChannelSubscribers } from './Detail';
+import { ChannelDetail, ChannelSubscribers } from './Detail';
 
 /**
  * Builds a Channel in namespace `orders` of `cluster-a` with the given subscriber states.
@@ -107,13 +127,53 @@ function channel(subscribers: NonNullable<KnativeChannel['status']>['subscribers
   return stub as unknown as KnativeChannel;
 }
 
-describe('ChannelSubscribers', () => {
-  beforeEach(() => {
-    links.length = 0;
-    subscriptions.lists = 0;
-    subscriptions.items = [{ metadata: { uid: 'uid-1' }, getName: () => 'orders-to-display' }];
-  });
+beforeEach(() => {
+  links.length = 0;
+  destinationLink.mockClear();
+  subscriptions.lists = 0;
+  subscriptions.error = null;
+  subscriptions.items = [{ metadata: { uid: 'uid-1' }, getName: () => 'orders-to-display' }];
+});
 
+describe('ChannelDetail', () => {
+  it('shows the backing Channel and the address', () => {
+    render(<ChannelDetail />);
+
+    const rows = detail.extraInfo?.({
+      cluster: 'cluster-a',
+      getNamespace: () => 'orders',
+      address: 'http://orders-kn-channel.orders.svc.cluster.local',
+      status: {
+        channel: {
+          apiVersion: 'messaging.knative.dev/v1',
+          kind: 'InMemoryChannel',
+          name: 'orders',
+        },
+      },
+    });
+
+    expect(rows?.map(row => row.name)).toEqual(['Backing Channel', 'Address']);
+    const { container } = render(
+      <>
+        {rows?.map(row => (
+          <Fragment key={row.name}>{row.value}</Fragment>
+        ))}
+      </>
+    );
+    expect(container.textContent).toBe('http://orders-kn-channel.orders.svc.cluster.local');
+    expect(destinationLink.mock.calls.map(([props]) => props)).toEqual([
+      {
+        destination: {
+          ref: { apiVersion: 'messaging.knative.dev/v1', kind: 'InMemoryChannel', name: 'orders' },
+        },
+        namespace: 'orders',
+        cluster: 'cluster-a',
+      },
+    ]);
+  });
+});
+
+describe('ChannelSubscribers', () => {
   it("links each subscriber to its Subscription's page by UID", () => {
     const { container } = render(
       <ChannelSubscribers channel={channel([{ uid: 'uid-1', ready: 'True' }])} />
@@ -139,6 +199,28 @@ describe('ChannelSubscribers', () => {
     expect(container.textContent).toContain('Not Ready');
     expect(container.textContent).toContain('gone');
     expect(links).toEqual([]);
+  });
+
+  it('says so when the Subscriptions cannot be loaded, and shows the UIDs', () => {
+    subscriptions.error = new Error('forbidden');
+    subscriptions.items = [];
+    const { container } = render(
+      <ChannelSubscribers channel={channel([{ uid: 'uid-1', ready: 'True' }])} />
+    );
+
+    expect(container.textContent).toContain(
+      'Subscription names could not be loaded, so subscribers are shown by UID.'
+    );
+    expect(container.textContent).toContain('uid-1');
+    expect(links).toEqual([]);
+  });
+
+  it('does not say the Subscriptions could not be loaded when they could', () => {
+    const { container } = render(
+      <ChannelSubscribers channel={channel([{ uid: 'uid-1', ready: 'True' }])} />
+    );
+
+    expect(container.textContent).not.toContain('could not be loaded');
   });
 
   it('says when the Channel reports no subscribers, without listing Subscriptions', () => {

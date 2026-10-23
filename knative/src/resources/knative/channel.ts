@@ -26,14 +26,28 @@ import type {
 } from './common';
 import { ConditionedKnativeCustomResource, type ConditionedStatus } from './conditionedResource';
 
+/** The state a Channel reports for one of its Subscriptions. */
+export interface ChannelSubscriberStatus {
+  /** Details used for OIDC authentication. */
+  auth?: AuthStatus;
+  /** A human-readable message with details about the Ready status. */
+  message?: string;
+  /** Generation of the Subscription with the UID `uid`. */
+  observedGeneration?: number;
+  /** Whether the subscriber is ready: `True`, `False` or `Unknown`. */
+  ready?: ConditionStatus;
+  /** UID of the Subscription this status belongs to. */
+  uid?: string;
+}
+
 /** A Knative Channel, as the v1 `channels.messaging.knative.dev` CRD defines it. */
 interface KnativeChannelResource extends KubeObjectInterface {
   /** How the Channel is set up. */
   spec?: {
     /**
      * Which Channel CRD backs this Channel, and the spec to create it with. It cannot change after
-     * the Channel is created, and Knative's defaulting usually sets it rather than the user;
-     * Knative requires it, though the CRD schema does not mark it as required.
+     * the Channel is created, and Knative's defaulting usually sets it rather than the user; Knative
+     * requires it, though the CRD schema does not mark it as required.
      */
     channelTemplate?: {
       /** API version of the backing Channel kind. */
@@ -98,18 +112,7 @@ interface KnativeChannelResource extends KubeObjectInterface {
     /** The EventPolicies applied to the Channel. */
     policies?: AppliedEventPolicyRef[];
     /** The state of each Subscription to this Channel. */
-    subscribers?: {
-      /** Details used for OIDC authentication. */
-      auth?: AuthStatus;
-      /** A human-readable message with details about the Ready status. */
-      message?: string;
-      /** Generation of the Subscription with the UID `uid`. */
-      observedGeneration?: number;
-      /** Whether the subscriber is ready: `True`, `False` or `Unknown`. */
-      ready?: ConditionStatus;
-      /** UID of the Subscription this status belongs to. */
-      uid?: string;
-    }[];
+    subscribers?: ChannelSubscriberStatus[];
   };
 }
 
