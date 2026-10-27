@@ -238,7 +238,7 @@ describe('SourcesList', () => {
       options: { cluster: 'cluster-a', namespace: ['orders'] },
     });
     expect(lastView()?.data).toEqual([{ name: 'k8s-events' }, { name: 'heartbeat' }]);
-    expect(lastView()?.errors).toBeNull();
+    expect(lastView()?.errors).toEqual([]);
   });
 
   it('waits while the Source kinds are being found', () => {

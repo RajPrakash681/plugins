@@ -18,12 +18,6 @@ import type { FilterState } from '@kinvolk/headlamp-plugin/lib/redux/filterSlice
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
-/** The part of Headlamp's Redux state that holds the namespace filter. */
-type State = {
-  /** Headlamp's list filters; `namespaces` is empty when every namespace is shown. */
-  filter: FilterState;
-};
-
 /**
  * Reads the namespaces selected in Headlamp's namespace filter, for lists that load their items
  * themselves instead of through `ResourceListView`'s `resourceClass`.
@@ -32,6 +26,6 @@ type State = {
  * namespace.
  */
 export function useSelectedNamespaces(): string[] | undefined {
-  const namespaces = useSelector((state: State) => state.filter.namespaces);
+  const namespaces = useSelector(({ filter }: { filter: FilterState }) => filter.namespaces);
   return useMemo(() => (namespaces.size === 0 ? undefined : [...namespaces]), [namespaces]);
 }

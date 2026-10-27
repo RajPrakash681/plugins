@@ -23,31 +23,16 @@ import type { KnativeTrigger } from './trigger';
 const BROKER_CLASS_ANNOTATION = 'eventing.knative.dev/broker.class';
 
 export const KNATIVE_SOURCE_KINDS: KnativeResourceClass[] = [
-  {
-    kind: 'ApiServerSource',
-    apiName: 'apiserversources',
-    apiVersion: 'sources.knative.dev/v1',
-    isNamespaced: true,
-  },
-  {
-    kind: 'ContainerSource',
-    apiName: 'containersources',
-    apiVersion: 'sources.knative.dev/v1',
-    isNamespaced: true,
-  },
-  {
-    kind: 'PingSource',
-    apiName: 'pingsources',
-    apiVersion: 'sources.knative.dev/v1',
-    isNamespaced: true,
-  },
-  {
-    kind: 'SinkBinding',
-    apiName: 'sinkbindings',
-    apiVersion: 'sources.knative.dev/v1',
-    isNamespaced: true,
-  },
-];
+  ['ApiServerSource', 'apiserversources'],
+  ['ContainerSource', 'containersources'],
+  ['PingSource', 'pingsources'],
+  ['SinkBinding', 'sinkbindings'],
+].map(([kind, apiName]) => ({
+  kind,
+  apiName,
+  apiVersion: 'sources.knative.dev/v1',
+  isNamespaced: true,
+}));
 
 /**
  * Picks the API version to request a CRD's resources with.

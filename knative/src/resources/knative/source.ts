@@ -94,13 +94,9 @@ export function getKnativeSourceClass(info: KnativeResourceClass): typeof Knativ
   }
 
   const sourceClass = class extends KnativeSource {
-    /** The kind, such as `PingSource`. */
     static kind = info.kind;
-    /** The plural resource name, such as `pingsources`. */
     static apiName = info.apiName;
-    /** The `<group>/<version>` to request the Sources with. */
     static apiVersion = info.apiVersion;
-    /** Whether the Sources live in namespaces. */
     static isNamespaced = info.isNamespaced;
   };
   sourceClasses.set(key, sourceClass);

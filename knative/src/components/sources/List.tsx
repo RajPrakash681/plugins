@@ -30,6 +30,7 @@ import {
   KnativeSource,
   SOURCE_CRD_LABEL_SELECTOR,
 } from '../../resources/knative';
+import type { KnativeResourceClass } from '../../resources/knative/customResourceLinks';
 import { getSourceKindInfo, KNATIVE_SOURCE_KINDS } from '../../resources/knative/eventingData';
 import { destinationColumn } from '../common/DestinationLink';
 import { NotInstalledBanner } from '../common/NotInstalledBanner';
@@ -66,44 +67,58 @@ export function getSourceKinds(
   crds: Pick<CustomResourceDefinition, 'cluster' | 'jsonData'>[],
   clustersWithoutCrds: string[]
 ): SourceKind[] {
+  const toSourceKind = (cluster: string, info: KnativeResourceClass): SourceKind => ({
+    key: `${cluster}/${getKnativeCrdName(info)}`,
+    cluster,
+    sourceClass: getKnativeSourceClass(info),
+  });
+
   return [
     ...crds.flatMap(crd => {
       const info = getSourceKindInfo(crd.jsonData);
-      return info ? [{ cluster: crd.cluster, info }] : [];
+      return info ? [toSourceKind(crd.cluster, info)] : [];
     }),
     ...clustersWithoutCrds.flatMap(cluster =>
-      KNATIVE_SOURCE_KINDS.map(info => ({ cluster, info }))
+      KNATIVE_SOURCE_KINDS.map(info => toSourceKind(cluster, info))
     ),
-  ]
-    .map(({ cluster, info }) => ({
-      key: `${cluster}/${getKnativeCrdName(info)}`,
-      cluster,
-      sourceClass: getKnativeSourceClass(info),
-    }))
-    .sort((a, b) => a.key.localeCompare(b.key));
+  ].sort((a, b) => a.key.localeCompare(b.key));
 }
 
-/**
- * Lists the Sources of every kind and shows them in one table. It calls one list hook per kind,
- * so the kinds must not change while it is mounted: its parent gives it a key made from them.
- *
- * @param props - The kinds to list, the clusters whose Source CRDs could not be listed, and
- * whether to show the cluster column.
- * @returns The table, with the errors of every list that failed, and a note when only Knative's
- * own kinds are listed in some cluster.
- */
-function SourceRows({
-  sourceKinds,
-  clustersWithoutCrds,
-  showClusterColumn,
-}: {
+type SourceRowsProps = {
   /** The kinds to list. */
   sourceKinds: SourceKind[];
   /** The clusters whose Source CRDs could not be listed, so only Knative's own kinds are listed. */
   clustersWithoutCrds: string[];
   /** Whether more than one cluster is selected. */
   showClusterColumn: boolean;
-}) {
+};
+
+/**
+ * Lists the Sources of every kind and shows them in one table, with the errors of every list that
+ * failed and a note when only Knative's own kinds are listed in some cluster. It remounts the
+ * table whenever the kinds change, because the table calls one list hook per kind.
+ *
+ * @param props - The kinds to list, the clusters whose Source CRDs could not be listed, and
+ * whether to show the cluster column.
+ * @returns The table.
+ */
+function SourceRows(props: SourceRowsProps) {
+  return (
+    <SourceRowsOfKinds key={JSON.stringify(props.sourceKinds.map(kind => kind.key))} {...props} />
+  );
+}
+
+/**
+ * The table of `SourceRows`. The kinds must not change while it is mounted.
+ *
+ * @param props - The props of `SourceRows`.
+ * @returns The table.
+ */
+function SourceRowsOfKinds({
+  sourceKinds,
+  clustersWithoutCrds,
+  showClusterColumn,
+}: SourceRowsProps) {
   const namespaces = useSelectedNamespaces();
   const lists = sourceKinds.map(({ cluster, sourceClass }) =>
     sourceClass.useList({ cluster, namespace: namespaces })
@@ -117,20 +132,18 @@ function SourceRows({
       'namespace',
       ...(showClusterColumn ? (['cluster'] as const) : []),
       'kind',
-      destinationColumn<KnativeSource>('sink', 'Sink', item => item.sink),
+      destinationColumn('sink', 'Sink', item => item.sink),
       ...getReadinessColumns<KnativeSource>(),
       'age',
     ],
     [showClusterColumn]
   );
 
-  const errors = lists.flatMap(list => list.errors ?? []);
-
   return (
     <ResourceListView
       {...listViewProps}
       data={lists.some(list => list.isLoading) ? null : lists.flatMap(list => list.items ?? [])}
-      errors={errors.length > 0 ? errors : null}
+      errors={lists.flatMap(list => list.errors ?? [])}
       columns={columns}
       reflectInURL="knative-sources"
     >
@@ -173,13 +186,12 @@ function SourcesTable({
   const clustersWithoutCrds = clusters.filter(
     cluster =>
       !crds?.some(crd => crd.cluster === cluster) &&
-      !!errors?.some(error => !error.cluster || error.cluster === cluster)
+      errors?.some(error => !error.cluster || error.cluster === cluster)
   );
   const sourceKinds = getSourceKinds(crds ?? [], clustersWithoutCrds);
 
   return (
     <SourceRows
-      key={JSON.stringify(sourceKinds.map(kind => kind.key))}
       sourceKinds={sourceKinds}
       clustersWithoutCrds={clustersWithoutCrds}
       showClusterColumn={clusters.length > 1}
