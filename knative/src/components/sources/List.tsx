@@ -39,6 +39,8 @@ const listViewProps = {
   title: 'Sources',
   id: 'knative-sources',
   headerProps: { noNamespaceFilter: false },
+  enableRowActions: false,
+  enableRowSelection: false,
 };
 
 /** One kind of Source in one cluster. */
